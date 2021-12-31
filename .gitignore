@@ -1,0 +1,4 @@
+/vendor/
+result/*
+bin/console
+src/Command/Test*

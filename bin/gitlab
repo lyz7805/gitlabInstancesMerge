@@ -1,0 +1,22 @@
+#!/usr/bin/env php
+<?php
+
+ini_set('max_execution_time', 0);
+ini_set('memory_limit', -1);
+
+include_once __DIR__.'/../vendor/autoload.php';
+
+use App\Command\GroupExportToImportCommand;
+use App\Command\ProjectExportToImportCommand;
+use App\Command\UserExportCommand;
+use App\Command\UserImportCommand;
+use Symfony\Component\Console\Application;
+
+$app = new Application('GitLab Instance Merge Cli', '1.0');
+
+$app->add(new GroupExportToImportCommand());
+$app->add(new ProjectExportToImportCommand());
+$app->add(new UserExportCommand());
+$app->add(new UserImportCommand());
+
+$app->run();
