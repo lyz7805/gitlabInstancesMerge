@@ -7,6 +7,7 @@ use Gitlab\Client;
 use Gitlab\ResultPager;
 use Symfony\Component\Console\Command\Command;
 use Symfony\Component\Console\Input\InputInterface;
+use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
 use Symfony\Component\Console\Style\SymfonyStyle;
 
@@ -18,6 +19,13 @@ class ProjectExportToImportCommand extends AbstrachTwoGitlabCommand
     protected function configure(): void
     {
         parent::configure();
+        $this->addOption(
+            'overwrite',
+            'o',
+            InputOption::VALUE_OPTIONAL,
+            'is overwrite project, default false',
+            false
+        );
         $this->setHelp('This command allows you to export gitlab projects from an old gitlab instance and then import them into another new instance.');
     }
 
@@ -27,6 +35,11 @@ class ProjectExportToImportCommand extends AbstrachTwoGitlabCommand
         $io->title('EXPORT/IMPORT GITLAB PROJECTS');
 
         $io->info(sprintf('Now time: %s', date('Y-m-d H:i:s')));
+
+        $isOverwrite = $input->getOption('overwrite') !== false;
+        if ($isOverwrite) {
+            $io->warning('All projects will Overwrite if it is exists.');
+        }
 
         // export gitlab client
         $eClient = new Client();
@@ -132,47 +145,55 @@ class ProjectExportToImportCommand extends AbstrachTwoGitlabCommand
                 if ($name == 'lost-and-found') {
                     $msg = 'Project: '.$name.' dont need import';
                     $io->warning($msg);
-                    
+
                     $iProjectsResRows[] = [$id, null, 'info', $msg];
                     goto sleepToNext;
                 }
 
-                $io->section("Check whether the project: $name exists:");
                 $iProjects = new Projects($iClient);
                 $iPager = new ResultPager($iClient, $this->perPage);
+                if (!$isOverwrite) {
+                    $io->section("Check whether the project: $name exists:");
 
-                $iProjectsGen = $iPager->fetchAllLazy($iProjects, 'all', [[
-                    'search' => $path,
-                    // 'search_namespaces' => true,
-                    'order_by' => 'name',
-                    'sort' => 'asc',
-                ]]);
-                $hasProject = false;
-                foreach ($iProjectsGen as $iProject) {
-                    if ($iProject['path_with_namespace'] == $path_with_namespace) {
-                        $hasProject = true;
-                        break;
+                    $iProjectsGen = $iPager->fetchAllLazy($iProjects, 'all', [[
+                        'search' => $path,
+                        // 'search_namespaces' => true,
+                        'order_by' => 'name',
+                        'sort' => 'asc',
+                    ]]);
+                    $hasProject = false;
+                    foreach ($iProjectsGen as $iProject) {
+                        if ($iProject['path_with_namespace'] == $path_with_namespace) {
+                            $hasProject = true;
+                            break;
+                        }
+                        usleep(300000);
                     }
-                    usleep(300000);
-                }
 
-                if ($hasProject) {
-                    $msg = sprintf('Project: %s(path: %s) exists, do not import', $name, $path_with_namespace);
-                    $io->warning($msg);
-                    
-                    $iProjectsResRows[] = [$id, $iProject['id'], 'warning', $msg];
-                    goto sleepToNext;
+                    if ($hasProject) {
+                        $msg = sprintf('Project: %s(path: %s) exists, do not import', $name, $path_with_namespace);
+                        $io->warning($msg);
+
+                        $iProjectsResRows[] = [$id, $iProject['id'], 'warning', $msg];
+                        goto sleepToNext;
+                    }
+                    $io->info('Project: '.$name.' not exists');
                 }
-                $io->info('Project: '.$name.' not exists');
 
                 $io->section('Import project:');
                 $io->info([
                     'name: '.$name,
                     'path: '.$path_with_namespace,
                     'file: '.$fullFilePath,
+                    'overwrite?: '.($isOverwrite ? 'true' : 'false'),
                 ]);
                 try {
-                    $importRes = $iProjects->import($path, $fullFilePath, $namespace_full_path, $name);
+                    if ($isOverwrite) {
+                        // if overwrite and the project name exists, then api will response 400
+                        $importRes = $iProjects->import($path, $fullFilePath, $namespace_full_path, null, $isOverwrite);
+                    } else {
+                        $importRes = $iProjects->import($path, $fullFilePath, $namespace_full_path, $name, $isOverwrite);
+                    }
                 } catch (\Exception $e) {
                     $msg = sprintf('Import project: %s(path: %s) error: %d - %s', $name, $path, $e->getCode(), $e->getMessage());
                     $io->error($msg);
@@ -206,6 +227,17 @@ class ProjectExportToImportCommand extends AbstrachTwoGitlabCommand
                     $msg = sprintf('Import project: %s(path: %s) finished', $name, $path_with_namespace);
                     $io->success($msg);
                     $iProjectsResRows[] = [$id, $iProjectId, 'success', $msg];
+
+                    if ($isOverwrite) {
+                        if ($status['name'] !== $name) {
+                            $iUpdate = $iProjects->update($iProjectId, [
+                                'name' => $name
+                            ]);
+                            $io->success(sprintf('The old project name: %s has been changed to $s', $status['name'], $iUpdate['name']));
+                        } else {
+                            $io->success('The project name does not change.');
+                        }
+                    }
                 }
 
                 sleepToNext:
